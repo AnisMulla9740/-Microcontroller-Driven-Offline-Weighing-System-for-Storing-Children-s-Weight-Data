@@ -1,0 +1,140 @@
+#include <HX711.h>
+#include <Keypad.h>
+#include <SD.h>
+#include <RTClib.h>
+#include <LiquidCrystal_I2C.h>
+
+// Load Cell
+HX711 scale;
+const int LOADCELL_DOUT_PIN = A0;
+const int LOADCELL_SCK_PIN = A1;
+float calibration_factor = -96650;
+
+// Keypad
+const byte ROWS = 4, COLS = 4;
+char keys[ROWS][COLS] = {{'1','2','3','A'}, {'4','5','6','B'}, {'7','8','9','C'}, {'*','0','#','D'}};
+byte rowPins[ROWS] = {5, 4, 3, 2};
+byte colPins[COLS] = {6, 7, 8, 9};
+Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
+
+// SD Card
+const int SD_CS_PIN = 10;
+
+// RTC
+RTC_DS3231 rtc;
+DateTime now;
+
+// LCD
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+// Variables
+String uid = "";
+String studentName = "";
+
+void setup() {
+  Serial.begin(9600);
+  lcd.init();
+  lcd.backlight();
+
+  // Initialize components
+  scale.begin(LOADCELL_DOUT_PIN, LOADCELL_SCK_PIN);
+  scale.set_scale(calibration_factor);
+  scale.tare();
+
+  if (!rtc.begin()) lcd.print("RTC Error!");
+  if (!SD.begin(SD_CS_PIN)) lcd.print("SD Error!");
+
+  lcd.print("System Ready!");
+  delay(2000);
+  lcd.clear();
+}
+
+void loop() {
+  // Step 1: Get UID
+  lcd.print("Enter UID:");
+  uid = getUID();
+  lcd.clear();
+
+  // Step 2: Find student name from student_information.csv
+  if (findStudent(uid, studentName)) {
+    lcd.print("Student: " + studentName);
+    delay(2000);
+    lcd.clear();
+
+    // Step 3: Measure weight
+    lcd.print("Measuring...");
+    float weight = getWeight();
+    lcd.clear();
+
+    // Step 4: Save to date-specific file
+    saveWeightData(uid, studentName, weight);
+    lcd.print("Data Saved!");
+    delay(3000);
+  } else {
+    lcd.print("UID Not Found!");
+    delay(3000);
+  }
+  lcd.clear();
+}
+
+// --------------------- Functions ---------------------
+String getUID() {
+  String input = "";
+  while (input.length() < 8) { // Assume 8-digit UID
+    char key = keypad.getKey();
+    if (key) {
+      if (key == '#') break;
+      input += key;
+      lcd.setCursor(input.length()-1, 1);
+      lcd.print('*');
+    }
+  }
+  return input;
+}
+
+bool findStudent(String uid, String &name) {
+  File studentFile = SD.open("student_information.csv");
+  if (studentFile) {
+    while (studentFile.available()) {
+      String line = studentFile.readStringUntil('\n');
+      int commaIndex = line.indexOf(',');
+      String fileUID = line.substring(0, commaIndex);
+      if (fileUID == uid) {
+        name = line.substring(commaIndex + 1);
+        studentFile.close();
+        return true;
+      }
+    }
+    studentFile.close();
+  }
+  return false;
+}
+
+void saveWeightData(String uid, String name, float weight) {
+  now = rtc.now();
+  String date = String(now.year()) + "-" + 
+               String(now.month() < 10 ? "0" : "") + now.month() + "-" + 
+               String(now.day() < 10 ? "0" : "") + now.day();
+
+  String filename = date + ".csv";
+  File dataFile = SD.open(filename, FILE_WRITE);
+
+  if (dataFile) {
+    dataFile.print(now.timestamp(DateTime::TIMESTAMP_TIME));
+    dataFile.print(",");
+    dataFile.print(uid);
+    dataFile.print(",");
+    dataFile.print(name);
+    dataFile.print(",");
+    dataFile.println(weight, 1); // 1 decimal place
+    dataFile.close();
+  }
+}
+
+float getWeight() {
+  scale.power_up();
+  delay(100);
+  float reading = scale.get_units(10);
+  scale.power_down();
+  return (reading > 0) ? reading : 0.0;
+}
