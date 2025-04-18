@@ -1,0 +1,1 @@
+# -Microcontroller-Driven-Offline-Weighing-System-for-Storing-Children-s-Weight-Data
